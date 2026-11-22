@@ -1,0 +1,40 @@
+{
+  "sheets": [
+    {
+      "id": "paper",
+      "width": "4",
+      "height": "2"
+    }
+  ],
+  "folds": [
+    {
+      "id": "half",
+      "a": "1",
+      "b": "0",
+      "c": "2"
+    }
+  ],
+  "queries": [
+    {
+      "id": "inside",
+      "point": [
+        "1",
+        "1"
+      ]
+    },
+    {
+      "id": "outside",
+      "point": [
+        "3",
+        "1"
+      ]
+    },
+    {
+      "id": "crease",
+      "point": [
+        "2",
+        "1"
+      ]
+    }
+  ]
+}
