@@ -9,8 +9,21 @@ processing are exported here for convenience:
 ``loads(text)``              read such a package back in a fresh process
 ``rebuild_window(a, req)``   rebuild one original-paper window from the package
 ``serialize_window(result)`` compact JSON text for a rebuild result
+
+The offline entry point for the train/evaluation release manifests:
+
+``build_manifest(data)``     split samples into leakage-free train/evaluation
+                             ID lists that meet the evaluation quotas exactly
+
+Its business failures raise ``ManifestError`` subclasses
+(``PreviousAssignmentConflictError``, ``QuotaUnsatisfiableError``); invalid
+input raises plain ``ValueError``.
 """
 
 from .archive import build_archive, dumps, loads, rebuild_window, serialize_window
+from .manifest import (ManifestError, PreviousAssignmentConflictError,
+                       QuotaUnsatisfiableError, build_manifest)
 
-__all__ = ['build_archive', 'dumps', 'loads', 'rebuild_window', 'serialize_window']
+__all__ = ['build_archive', 'dumps', 'loads', 'rebuild_window', 'serialize_window',
+           'build_manifest', 'ManifestError', 'PreviousAssignmentConflictError',
+           'QuotaUnsatisfiableError']

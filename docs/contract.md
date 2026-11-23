@@ -96,3 +96,59 @@ text = serialize_window(result)
 ### 错误识别
 
 生成与重建的所有业务错误都是 `ValueError`，消息说明是哪一类：字段/额外字段、批次或标注越界、重复身份、非法 ID、非正矩形、超出纸面的请求、未知纸号/面/批号、不支持的格式或版本、超限包。`loads` 还拒绝重复 JSON 键、`NaN`/`Infinity` 和非对象根节点。CLI 与 `process` 的既有行为不变。
+
+## 训练/评测清单发布
+
+版面回归样本按采集件与版面结果防泄漏分组，再整组分到训练侧或评测侧。`paper_layers.manifest` 的离线入口 `build_manifest(data)` 生成两条流水线可直接加载的完整样本 ID 清单；不改变既有版面计算、查询、标注接口与命令行。
+
+```python
+from paper_layers.manifest import (
+    build_manifest, ManifestError,
+    PreviousAssignmentConflictError, QuotaUnsatisfiableError)
+
+result = build_manifest({
+    'samples': [
+        {'id': 's1', 'origin': 'o1', 'channel': 'field',
+         'layout': {'sheets': [{'id': 'P', 'width': '4', 'height': '2'}],
+                    'folds': [{'id': 'f', 'a': '1', 'b': '0', 'c': '2'}]}},
+        {'id': 's2', 'origin': None, 'channel': 'lab',
+         'layout': {'sheets': [{'id': 'P', 'width': '3', 'height': '2'}],
+                    'folds': []}},
+    ],
+    'previous': None,
+    'quota': {'evaluation_total': 1, 'evaluation_field': 0},
+})
+# result == {'train': ['s1'], 'evaluation': ['s2']}
+```
+
+### 输入
+
+`data` 恰含 `samples, previous, quota` 三个字段，输入只读不改写。
+
+- `samples` 为 0..40,000 条记录，每条恰含 `id, origin, channel, layout`。样本 `id` 唯一，与采集件 ID 都沿用基线 ID 语法 `[A-Za-z0-9_:-]{1,64}`（两个命名空间相互独立）。`origin` 是采集件 ID 或 `null`（未提供来源，不构成关联）。`channel` 为 `field`（现场）或 `lab`（实验室）。`layout` 是既有 `sheets, folds` 格式（1..10 张、0..10 道折等限额不变），不含点查询。
+- `previous` 为 `null`（首次发布）或恰含 `train, evaluation` 两个数组，列出本数据集曾向对应方发布的样本 ID；可以直接传入上期结果。数组内及数组间不得重复，且每个 ID 必须仍在当前 `samples` 中。样本 ID 从不重新分配；当前输入可以修订采集件关联，但旧清单中的归属不可更改。
+- `quota` 恰含 `evaluation_total, evaluation_field` 两个非负整数（布尔值不算）：前者 0..2,048，后者 0..1,024 且不得大于前者。配额按样本数计算，不按采集件或版面种类数计算。
+
+### 分组（防泄漏）
+
+两条记录满足任一条件即关联：采集件 ID 相同且非空；或版面结果等价。关联可传递，先用当前全部样本求出完整的不可拆分组，再处理发布归属。同一采集件的变体即使版面不同也同组；版面别名是分流约束，不是删重——不同样本 ID 全部保留。
+
+版面等价比较的是已有折叠计算产出的**完整**有序碎片结果（底到顶），不是输入文本、总面积、最顶层轮廓或少数查询命中：原纸按 `sheets` 输入序号对应，数量及按序尺寸必须相等；碎片逐项对应，所在原纸序号、朝上面、精确覆盖多边形、从版面坐标到该原纸坐标的仿射映射都必须相等。比较忽略纸号、步骤号与步骤路径；同一多边形不因起始顶点、绕行方向或边上多出共线点而不同。不合并不同碎片，不使用浮点容差。
+
+### 发布规则
+
+- 组内含有之前发到训练侧的样本，整组进训练；含有之前发到评测侧的样本，整组进评测。
+- 一组同时含两种既有归属：抛出 `PreviousAssignmentConflictError`，即使放宽配额也不交付。
+- 其余整组分配，使最终评测总数及其中现场样本数同时恰好命中配额。无解（包括固定评测样本已经超过配额）时抛出 `QuotaUnsatisfiableError`，不交付部分清单、近似配额，也不移动旧样本。
+- 多解时选**按样本 ID 升序排序后的评测 ID 列表字典序最小**的一份，训练侧取其补集。打乱 `samples` 或旧清单数组的顺序不影响结果；`sheets` 与 `folds` 的业务顺序仍有意义。
+
+### 输出与错误契约
+
+成功结果恰含 `train, evaluation` 两个升序 ID 数组，所有输入样本各出现一次。错误分两类，可以互相区分：
+
+- 无效输入抛普通 `ValueError`：缺字段、多字段、非法类型或 ID、重复身份、旧清单中的未知 ID、无效版面、配额越界等。
+- 业务失败抛 `ManifestError` 的子类（同时也是 `ValueError`）：`PreviousAssignmentConflictError`（既有归属冲突）与 `QuotaUnsatisfiableError`（配额不可满足）。`except ValueError` 仍能一网打尽，`except ManifestError` 只命中业务失败。
+
+### 资源验收
+
+每期发布在没有临时盘的 192 MiB 离线作业进程中排程。`tests/manifest_resource_job.py` 是可复现验收：独立进程在生成夹具前把地址空间上限设为 192 MiB（Linux `RLIMIT_AS`），不借子进程或磁盘文件中转计算。夹具首次发布，含 8,192 个采集件组：按最小样本 ID 排序依次是 2,730 个 A 类组（3 条、2 条现场）、2,731 个 B 类组（2 条、1 条现场）、2,731 个 C 类组（4 条、1 条现场）；样本 ID 用字母前缀、定宽组号和组内编号按组连续排序；所有版面互不相同（单纸无步骤，高 1，宽从 1 递增）。配额 2,048 条评测、其中 1,024 条现场，必须恰好选中各类前 408、4、204 个组，训练侧为余集。本地 CPython 3.11 实测峰值约 67 MiB、约 7 秒；40,000 条全独立样本的上限场景约 107 MiB、约 22 秒。
