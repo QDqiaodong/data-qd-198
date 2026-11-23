@@ -1,7 +1,8 @@
 from .checks import fields,array,ident,unique,number,vector
 
-def parse(data):
-    fields(data,('sheets','folds','queries'));sheets=[];folds=[];queries=[]
+def layout_parts(data):
+    """Parse the legacy `layout` object: only `sheets` and `folds`."""
+    fields(data,('sheets','folds'));sheets=[];folds=[]
     for item in array(data['sheets'],1,10):
         fields(item,('id','width','height'));key=ident(item['id']);w=number(item['width']);h=number(item['height'])
         if w<=0 or h<=0:raise ValueError('positive sheet dimensions required')
@@ -12,6 +13,11 @@ def parse(data):
         if a==b==0:raise ValueError('zero fold normal')
         folds.append((key,a,b,c))
     unique([f[0] for f in folds])
+    return sheets,folds
+
+def parse(data):
+    fields(data,('sheets','folds','queries'))
+    sheets,folds=layout_parts({'sheets':data['sheets'],'folds':data['folds']});queries=[]
     for item in array(data['queries'],0,100):
         fields(item,('id','point'));queries.append((ident(item['id']),vector(item['point'],2)))
     unique([q[0] for q in queries])
