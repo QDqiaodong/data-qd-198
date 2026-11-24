@@ -41,9 +41,17 @@ Its business failures raise ``RecheckError`` subclasses
 (``InfeasibleManifestError``, ``HandoffSizeError``); bad input at
 interpretation time raises ``HandoffInputError`` (also a ``RecheckError``),
 while invalid build input raises plain ``ValueError``.
+
+The offline adhesive-interface entry point for the folded stack:
+
+``build_bonds(data)``        every adjacent-layer interface with both contact
+                             polygons and one judgement per bond specification
+
+Invalid input raises plain ``ValueError`` and never yields a partial result.
 """
 
 from .archive import build_archive, dumps, loads, rebuild_window, serialize_window
+from .bonds import build_bonds
 from .manifest import (ManifestError, PreviousAssignmentConflictError,
                        QuotaUnsatisfiableError, build_manifest)
 from .receiver import (Receiver, ReceiverConflictError, ReceiverError,
@@ -65,4 +73,5 @@ __all__ = ['build_archive', 'dumps', 'loads', 'rebuild_window', 'serialize_windo
            'package_dumps', 'package_loads',
            'build_handoff', 'interpret_handoff', 'handoff_dumps',
            'handoff_loads', 'RecheckError', 'InfeasibleManifestError',
-           'HandoffSizeError', 'HandoffInputError']
+           'HandoffSizeError', 'HandoffInputError',
+           'build_bonds']

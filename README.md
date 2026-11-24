@@ -143,11 +143,34 @@ result = interpret_handoff(handoff_loads(open('handoff.json', encoding='utf-8').
 
 选测约束、交接件字段、判读规则与错误分类的完整约定见 [数据契约](docs/contract.md)。
 
+## 折叠层叠件的粘接界面
+
+制样组按折叠后的层叠状态粘接纸件。`paper_layers.bonds` 的离线入口 `build_bonds(data)` 接收既有版面（`sheets, folds`）与 0..1,024 条粘接规范，返回完整的相邻层界面清单、每条界面两侧分别在两张原纸上的精确区域，以及逐项满足情况；不新增 CLI、界面或物理折纸模拟，既有 `process`、点查询、标注归档、清单与证据入口行为不变。
+
+```python
+from paper_layers.bonds import build_bonds
+
+result = build_bonds({
+    'layout': {'sheets': [{'id': 'A', 'width': '4', 'height': '2'},
+                          {'id': 'B', 'width': '4', 'height': '2'}],
+               'folds': [{'id': 'half', 'a': '1', 'b': '0', 'c': '2'}]},
+    'bonds': [{'id': 'ab8', 'side_a': {'sheet': 'A', 'face': 'front'},
+               'side_b': {'sheet': 'B', 'face': 'back'}, 'min_area': '8'}],
+})
+# 三个相邻层界面，面积均为 4；其中 A.front/B.back 出现在两个不同层位，合计 8，满足 ab8
+```
+
+- 每个版面位置取覆盖它的碎片按最终层序排列，只有局部层栈里彼此相邻的两片才构成接触；全局不相邻的两片可在中间碎片不覆盖处直接接触，被中间层遮住的投影交集不计。边/点相接不算界面，投影相同但深度不同的界面分别交付，接触不连通时拆成互不重叠的简单多边形。
+- 每条界面保留两片的最终层号（零起始，局部相邻不保证连续）、下侧纸号与朝上面、上侧纸号与朝上面（上层取其当前朝上面之反面）、投影接触多边形、两侧各自映回原纸的精确多边形及面积；坐标一律约分整数或 `n/d` 字符串，不用外接矩形。
+- 粘接规范按无序材料面匹配、跨层位累加可用面积；`available_area >= min_area` 即满足。返回全部界面与全部判定（含未满足），空规范仍返回真实界面清单；坏输入整体抛 `ValueError`，不留部分结果。`bonds` 数组改序不改变结果。
+
+界面构造、输出字段与错误的完整约定见 [数据契约](docs/contract.md)。
+
 ## 已执行验证
 
-依赖一致性检查、87 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景、192 MiB 资源验收、证据源仓/接收端的迟到版本归属、删除与插回、空包推进、前置行不符整包回滚、批次重试身份、真实 JSON 往返与重开场景，以及复验清单的抗缺站选测、站点重指派、不可区分版本无解、1024 层交接件大小限制内往返、缺站判读与旧入口回归场景）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
+依赖一致性检查、115 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景、192 MiB 资源验收、证据源仓/接收端的迟到版本归属、删除与插回、空包推进、前置行不符整包回滚、批次重试身份、真实 JSON 往返与重开场景、复验清单的抗缺站选测、站点重指派、不可区分版本无解、1024 层交接件大小限制内往返、缺站判读，以及粘接界面的双纸折叠三界面/跨层位面组合/三纸窄中间层透见/零面积折痕/分离纸件/空规范/改序稳定与坏输入整拒场景）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
 
-源码入口为 `src/paper_layers/service.py`、`src/paper_layers/archive.py`、`src/paper_layers/manifest.py` 与 `src/paper_layers/recheck.py`，测试在 `tests/`。业务字段、身份、单位、界限和失败约定见 [数据契约](docs/contract.md)。样例全部为原创合成数据，见 [样例来源](fixtures/SOURCES.md)，源码和样例采用MIT许可。
+源码入口为 `src/paper_layers/service.py`、`src/paper_layers/archive.py`、`src/paper_layers/bonds.py`、`src/paper_layers/manifest.py` 与 `src/paper_layers/recheck.py`，测试在 `tests/`。业务字段、身份、单位、界限和失败约定见 [数据契约](docs/contract.md)。样例全部为原创合成数据，见 [样例来源](fixtures/SOURCES.md)，源码和样例采用MIT许可。
 
 
 ## 当前边界
