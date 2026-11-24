@@ -115,11 +115,39 @@ receiver.position(), receiver.rows()
 
 源仓、接收端、增量包的字段、身份、错误分类（`BatchConflictError`/`RepositoryRangeError` 与 `ReceiverInputError`/`ReceiverPositionError`/`ReceiverConflictError`）、重启与 JSON 往返方法见 [数据契约](docs/contract.md)。
 
+## 复验测点清单与离线判读
+
+同一批待复验纸件可能来自几个已知版面版本，现场没有可信版本标签。`paper_layers.recheck` 的两个离线入口选出抗缺站与误读的测点清单、产出自包含交接件，并让判读方仅凭交接件 JSON 离线认出版本；不新增 CLI 或界面，既有入口行为不变。
+
+```python
+from paper_layers.recheck import (build_handoff, interpret_handoff,
+                                  handoff_dumps, handoff_loads)
+
+handoff = build_handoff({
+    'versions': [{'id': 'U', 'layout': {'sheets': [...], 'folds': []}}, ...],  # 2..12 个
+    'probes': [{'id': 'b1', 'station': 'B', 'point': ['2', '1'], 'cost': 2}, ...],  # 1..22 条、3..8 站
+    'required': ['a0'],          # 不可取消的已校准探针，可为空
+})
+open('handoff.json', 'w', encoding='utf-8').write(handoff_dumps(handoff))
+
+# 现场只有这份 JSON：一个站停工、其余站点至多一个测点读错时仍能认出版本
+result = interpret_handoff(handoff_loads(open('handoff.json', encoding='utf-8').read()),
+                           {'stopped': 'A', 'readings': [{'probe': 'b1', 'hits': [...]}]})
+# {'status': 'determined', 'version': 'U', 'remeasure': 'c1'}
+# {'status': 'ambiguous', 'versions': ['U', 'V']}  /  {'status': 'unexplainable'}
+```
+
+- 标准答案用既有 `process` 逐版本计算，保留完整有序命中列表（含折痕多重命中、空列表），每条只取 `layer, sheet, face, source_point`。清单包含全部必选探针，且对任意两个版本、任意一个站点，移除该站全部探针后仍至少有三条答案不同的探针。可行时依次取总成本最低、探针数最少、升序 ID 列表字典序最小者；输入排列不影响交付。两版本在全部测点不可区分也不合并，无可行清单抛 `InfeasibleManifestError`。
+- 交接件是带 `format/version` 的自包含普通 JSON：入选探针（站点与精确坐标）发给测量方，版本 ID 与去重共享的标准答案表供判读方；单件紧凑 UTF-8 JSON 不超过 250,000 字节，超限抛 `HandoffSizeError`，不降格、不截断。
+- 判读只比较实际收到的测点（缺读不同于收到空列表），保留至多一次错读的全部版本：恰好一个返回确定版本与需复测的错读探针（完全一致为 `null`），多个返回升序候选列表，没有则报告无法解释。坏交接件、未知格式版本、非法引用与无效读数抛 `HandoffInputError`，与无解及大小限制可区分；合法的错读是证据不是坏输入。
+
+选测约束、交接件字段、判读规则与错误分类的完整约定见 [数据契约](docs/contract.md)。
+
 ## 已执行验证
 
-依赖一致性检查、62 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景、192 MiB 资源验收，以及证据源仓/接收端的迟到版本归属、删除与插回、空包推进、前置行不符整包回滚、批次重试身份、真实 JSON 往返与重开场景）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
+依赖一致性检查、87 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景、192 MiB 资源验收、证据源仓/接收端的迟到版本归属、删除与插回、空包推进、前置行不符整包回滚、批次重试身份、真实 JSON 往返与重开场景，以及复验清单的抗缺站选测、站点重指派、不可区分版本无解、1024 层交接件大小限制内往返、缺站判读与旧入口回归场景）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
 
-源码入口为 `src/paper_layers/service.py`、`src/paper_layers/archive.py` 与 `src/paper_layers/manifest.py`，测试在 `tests/`。业务字段、身份、单位、界限和失败约定见 [数据契约](docs/contract.md)。样例全部为原创合成数据，见 [样例来源](fixtures/SOURCES.md)，源码和样例采用MIT许可。
+源码入口为 `src/paper_layers/service.py`、`src/paper_layers/archive.py`、`src/paper_layers/manifest.py` 与 `src/paper_layers/recheck.py`，测试在 `tests/`。业务字段、身份、单位、界限和失败约定见 [数据契约](docs/contract.md)。样例全部为原创合成数据，见 [样例来源](fixtures/SOURCES.md)，源码和样例采用MIT许可。
 
 
 ## 当前边界

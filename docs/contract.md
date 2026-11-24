@@ -215,3 +215,74 @@ receiver = Receiver.open('run/receiver')   # 重启后位置与行原样保留
 
 两个存储都只依赖各自目录里的 sqlite 文件：先 `close()`（或用 `with`）正常关闭，新进程里对同目录调用 `SourceRepository.open` / `Receiver.open` 即可继续；重开后重取历史区间得到内容相同的包，接收端重发上次成功的包只得到同一次成功结果。跨设备交接不复制存储目录，而是用 `package_dumps` 把包写成紧凑 JSON 文本、在对端用 `package_loads` 读回（可用任意普通 JSON 通道，如文件或消息体），接收端仅凭包即可更新行与位置。
 
+## 复验测点清单与离线判读
+
+同一批待复验纸件可能来自几个已知版面版本中的任意一个，现场没有可信版本标签。`paper_layers.recheck` 的离线入口 `build_handoff(data)` 选出一份抗缺站与误读的测点清单并产出自包含交接件；判读方仅凭交接件 JSON、一个停工站点和实际读数用 `interpret_handoff(handoff, request)` 离线认出版本。既有版面计算、标注归档、清单发布与证据仓接口不变。
+
+```python
+from paper_layers.recheck import (
+    build_handoff, interpret_handoff, handoff_dumps, handoff_loads,
+    RecheckError, InfeasibleManifestError, HandoffSizeError, HandoffInputError)
+
+handoff = build_handoff({
+    'versions': [{'id': 'U', 'layout': {'sheets': [...], 'folds': []}}, ...],
+    'probes': [{'id': 'b1', 'station': 'B', 'point': ['2', '1'], 'cost': 2}, ...],
+    'required': ['a0'],
+})
+open('handoff.json', 'w', encoding='utf-8').write(handoff_dumps(handoff))
+
+# 现场新进程里只有这份 JSON，没有布局也不能重跑折叠：
+result = interpret_handoff(handoff_loads(open('handoff.json', encoding='utf-8').read()),
+                           {'stopped': 'A',
+                            'readings': [{'probe': 'b1', 'hits': [...]}]})
+```
+
+### 选测输入与标准答案
+
+`data` 恰含 `versions, probes, required` 三个字段，输入只读不改写。
+
+- `versions` 为 2..12 条 `{id, layout}`，版本 ID 唯一，`layout` 是既有 `sheets, folds` 格式（限额不变）。
+- `probes` 为 1..22 条 `{id, station, point, cost}`，探针 ID 唯一；站点 ID 可复用，不同站点总数 3..8；`point` 沿用基线查询坐标语法；`cost` 是 1..1,000,000 的整数（布尔值不算）。所有标识沿用基线 ID 语法。位置相同但 ID 不同的是不同的实际测量，可能由不同站点完成，选测与判读都按 ID 区分。
+- `required` 为 0..22 个不可取消的已校准探针 ID，不得重复或引用未知 ID，可为空。
+
+每个测点的标准答案用既有 `process` 计算一次，保留**完整有序命中列表**（含折痕多重命中），每条只取 `layer, sheet, face, source_point`，不带步骤路径；空列表是正常读数。两个版本只有在该测点的列表逐项精确相等时才算答案相同。
+
+### 选测规则
+
+清单以探针为单位选择，包含全部必选探针。可行性约束：对任意两个不同候选版本、任意一个站点，把该站全部探针移除后，清单上仍须有**至少三条**两版本标准答案不同的探针。只在所有站在线时验证区分能力会低估所需探针数。即使两个版本在全部候选测点上都不可区分也不合并——此时无可行清单，抛 `InfeasibleManifestError`，不交付部分方案。
+
+可行时按字典序取最优：总成本最低，其次探针数最少，再其次升序探针 ID 列表字典序最小。改变 `versions`、`probes`、`required` 的排列不改变交付内容。
+
+### 交接件格式（版本 1）
+
+交接件是带格式标识的自包含普通 JSON 对象，不依赖原布局、外部文件或压缩二进制：
+
+```json
+{"format": "paper-recheck-handoff", "version": 1,
+ "stations": ["A", "B", "C"],
+ "probes": [{"id": "b1", "point": ["2", "1"], "station": "B"}],
+ "answers": [[{"layer": 0, "sheet": "P", "face": "front", "source_point": ["2", "1"]}]],
+ "versions": [{"id": "U", "expected": {"b1": 0}}]}
+```
+
+- `stations` 记录全部原始候选站点（升序），包括未入选任何测点的站；停工校验以此为准。
+- `probes` 是升序的入选清单，每条恰含 `id, station, point`；坐标规范化为输出口径的约分整数或分数字符串，可直接发给测量方。
+- `answers` 是去重后的标准答案表（普通 JSON 结构共享重复内容）；`versions` 按版本 ID 升序，每个 `expected` 恰好把每个入选探针指到表中的一条答案。
+- 单件完整 UTF-8 紧凑 JSON（逗号冒号分隔、无外围空白）不超过 **250,000 字节**。超限抛 `HandoffSizeError`，不替换成次优清单、不截断标准答案、不只交测量清单。`handoff_dumps` 对手工构造的超限对象同样报错；`handoff_loads` 拒绝超限文本、重复 JSON 键、`NaN`/`Infinity` 与非对象根节点。
+
+### 现场判读
+
+`interpret_handoff(handoff, request)` 的 `request` 恰含 `stopped, readings`：
+
+- `stopped` 为 `null` 或交接件 `stations` 中记录的任一原始候选站点，即使该站未入选任何测点。
+- `readings` 为 0..22 条 `{probe, hits}`，每条对应一个**入选且未停工**的探针，每个探针至多一条；`hits` 沿用证据仓观测命中格式（四字段、层号严格升序、输出口径来源点），纸号不必出现在任何候选版面中。未收到读数的探针不参与判断（缺读不同于收到空列表）。
+
+判读只比较实际收到的测点：某版本在某测点的整个命中列表不同，记该测点一次错读。保留所有至多一次错读的版本：恰好一个返回 `{'status': 'determined', 'version': id, 'remeasure': 错读探针或 None}`；多个返回 `{'status': 'ambiguous', 'versions': [升序 ID]}`，不按成本、版本名或最少错读强行选一个；没有则返回 `{'status': 'unexplainable'}`。即使有额外缺读也按此规则判读。两个输入对象都不会被修改。
+
+### 错误识别
+
+- 生成侧无效输入（缺/多字段、非法类型或 ID、重复身份、未知必选 ID、无效版面或坐标、成本或站点数越界）抛普通 `ValueError`。
+- 业务失败抛 `RecheckError` 子类（仍是 `ValueError`）：`InfeasibleManifestError`（无可行清单）与 `HandoffSizeError`（交接件超限），与无效输入可区分。
+- 判读侧坏输入——无效交接件、未知格式或版本、非法引用（未知探针、缺失探针、答案下标越界、未知站点）、未知停工站点、对未入选或已停工探针的读数、重复读数、无效命中——抛 `HandoffInputError`（也是 `RecheckError`），与无解及大小限制可区分。格式合法但内容不符的错读是现场证据，不是坏输入。
+
+

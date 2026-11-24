@@ -29,6 +29,18 @@ Receiver failures split into ``ReceiverInputError`` (bad input/identity),
 ``ReceiverPositionError`` (dataset/interval/position) and
 ``ReceiverConflictError`` (before-row mismatch); source-repository failures
 split into ``BatchConflictError`` and ``RepositoryRangeError``.
+
+The offline re-verification probe manifest and field interpretation:
+
+``build_handoff(data)``            optimal station-down-proof probe manifest
+                                   plus per-version standard answers
+``interpret_handoff(handoff, req)`` judge the received readings offline
+``handoff_dumps/handoff_loads``    plain-JSON handoff round trip
+
+Its business failures raise ``RecheckError`` subclasses
+(``InfeasibleManifestError``, ``HandoffSizeError``); bad input at
+interpretation time raises ``HandoffInputError`` (also a ``RecheckError``),
+while invalid build input raises plain ``ValueError``.
 """
 
 from .archive import build_archive, dumps, loads, rebuild_window, serialize_window
@@ -36,6 +48,9 @@ from .manifest import (ManifestError, PreviousAssignmentConflictError,
                        QuotaUnsatisfiableError, build_manifest)
 from .receiver import (Receiver, ReceiverConflictError, ReceiverError,
                        ReceiverInputError, ReceiverPositionError)
+from .recheck import (HandoffInputError, HandoffSizeError,
+                      InfeasibleManifestError, RecheckError, build_handoff,
+                      handoff_dumps, handoff_loads, interpret_handoff)
 from .repository import (BatchConflictError, RepositoryError,
                          RepositoryRangeError, SourceRepository)
 from .evidence import package_dumps, package_loads
@@ -47,4 +62,7 @@ __all__ = ['build_archive', 'dumps', 'loads', 'rebuild_window', 'serialize_windo
            'RepositoryRangeError',
            'Receiver', 'ReceiverError', 'ReceiverInputError',
            'ReceiverPositionError', 'ReceiverConflictError',
-           'package_dumps', 'package_loads']
+           'package_dumps', 'package_loads',
+           'build_handoff', 'interpret_handoff', 'handoff_dumps',
+           'handoff_loads', 'RecheckError', 'InfeasibleManifestError',
+           'HandoffSizeError', 'HandoffInputError']
