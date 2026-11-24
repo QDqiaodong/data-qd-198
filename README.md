@@ -89,9 +89,35 @@ result = build_manifest({
 
 分组、等价与发布的完整规则见 [数据契约](docs/contract.md)。
 
+## 版面回归证据源仓与接收端
+
+参考版面常晚于采集观测到达。可持久化的源仓把逐条观测归属到生效版本，接收端只持证据副本，仅凭普通 JSON 增量包离线推进；不新增 CLI、界面或报表，既有版面计算、原纸标注、清单与旧入口行为不变。两者都是本地单写者，正常关闭后可重开继续（标准库 sqlite，无新依赖）。
+
+```python
+from paper_layers.repository import SourceRepository
+from paper_layers.receiver import Receiver
+from paper_layers.evidence import package_dumps, package_loads
+
+repo = SourceRepository.create('run/source', 'dataset-c')
+repo.ingest({'batch': 'b1', 'references': [...], 'observations': [...]})  # 返回提交号
+package = repo.package(0, repo.head())          # after/through 区间的净行变化包
+
+receiver = Receiver.create('run/receiver', 'dataset-c')
+receiver.apply(package_loads(package_dumps(package)))   # 普通 JSON 往返后更新
+receiver.position(), receiver.rows()
+# 重开：SourceRepository.open('run/source')、Receiver.open('run/receiver')
+```
+
+- 录入批次恰有 `batch, references, observations`，后两个数组合计 1..1,000 条；整批原子生效，坏批次不占提交号。同批次 ID 同内容重试返回原提交号，改内容拒绝；对象字段排列不影响重试身份，数组次序属于内容。
+- 参考声明含 `case, revision, effective_from, layout, probes`；同用例内版本 ID 与生效起点各自唯一，迟到更正可在已有起点间插入新版本。参考命中在录入时经现有 `process` 预先物化，保留全部命中及顺序（含折痕多重命中），只取 `layer, sheet, face, source_point`，不比较步骤路径、不替换纸号、不用浮点容差。
+- 观测按“不晚于 `observed_at` 的最大生效起点”归属，且只在该版本找探针；找不到版本或探针就不产生证据行，不退回旧版本。迟到参考改变受影响时间段内的归属，不改变更早提交号的历史。证据行含观测全部字段、`revision, expected_hits, matches`，版本本身即追溯依据。
+- 增量包带 `format/version/dataset/after/through/changes`，每个改变的 ID 升序一次、附完整 `before/after`（无行为 `null`），两端一致的 ID 不输出，空区间也返回。接收端只收同数据集且起点等于当前位置的下一段，先核对全部 `before` 再整包事务应用（空包也推进）；同包重发只得到同一次成功，旧包/跳段/交叠与前置行不符均可区分拒绝且现场不多不少一条。
+
+源仓、接收端、增量包的字段、身份、错误分类（`BatchConflictError`/`RepositoryRangeError` 与 `ReceiverInputError`/`ReceiverPositionError`/`ReceiverConflictError`）、重启与 JSON 往返方法见 [数据契约](docs/contract.md)。
+
 ## 已执行验证
 
-依赖一致性检查、46 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景及 192 MiB 资源验收）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
+依赖一致性检查、62 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景、192 MiB 资源验收，以及证据源仓/接收端的迟到版本归属、删除与插回、空包推进、前置行不符整包回滚、批次重试身份、真实 JSON 往返与重开场景）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
 
 源码入口为 `src/paper_layers/service.py`、`src/paper_layers/archive.py` 与 `src/paper_layers/manifest.py`，测试在 `tests/`。业务字段、身份、单位、界限和失败约定见 [数据契约](docs/contract.md)。样例全部为原创合成数据，见 [样例来源](fixtures/SOURCES.md)，源码和样例采用MIT许可。
 

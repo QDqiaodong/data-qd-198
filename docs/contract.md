@@ -152,3 +152,66 @@ result = build_manifest({
 ### 资源验收
 
 每期发布在没有临时盘的 192 MiB 离线作业进程中排程。`tests/manifest_resource_job.py` 是可复现验收：独立进程在生成夹具前把地址空间上限设为 192 MiB（Linux `RLIMIT_AS`），不借子进程或磁盘文件中转计算。夹具首次发布，含 8,192 个采集件组：按最小样本 ID 排序依次是 2,730 个 A 类组（3 条、2 条现场）、2,731 个 B 类组（2 条、1 条现场）、2,731 个 C 类组（4 条、1 条现场）；样本 ID 用字母前缀、定宽组号和组内编号按组连续排序；所有版面互不相同（单纸无步骤，高 1，宽从 1 递增）。配额 2,048 条评测、其中 1,024 条现场，必须恰好选中各类前 408、4、204 个组，训练侧为余集。本地 CPython 3.11 实测峰值约 67 MiB、约 7 秒；40,000 条全独立样本的上限场景约 107 MiB、约 22 秒。
+
+## 版面回归证据源仓与接收端
+
+采集站与参考版面维护组分别送数据，且参考版本经常晚到。`paper_layers.repository` 的源仓与 `paper_layers.receiver` 的接收端把逐条观测归属到正确的参考版本，并以普通 JSON 增量包离线交付；不新增 CLI、界面或报表，既有 `process`、归档、清单与命令行行为不变。两者都是本地单写者、可持久化、正常关闭后用 `open` 重开继续（标准库 sqlite，WAL 单文件加 `-wal/-shm`，无外部依赖）。
+
+### 源仓录入与归属
+
+```python
+from paper_layers.repository import SourceRepository
+
+repo = SourceRepository.create('run/source', 'dataset-c')   # dataset 不可变
+seq = repo.ingest({'batch': 'b1', 'references': [...], 'observations': [...]})
+# 重开：SourceRepository.open('run/source')，dataset/head/全部历史仍在
+```
+
+- 入仓批次恰含 `batch, references, observations`；两个数组合计 1..1,000 条。所有标识沿用基线 ID 语法 `[A-Za-z0-9_:-]{1,64}`；时间（`effective_from`、`observed_at`、提交区间端点）是非负整数，布尔值不算整数。提交号由源仓从 1 连续分配，与现场序号是两个独立概念。
+- 参考声明恰含 `case, revision, effective_from, layout, probes`。同一用例内 `revision` 与 `effective_from` 分别唯一，录入后不可覆盖；迟到更正只能以新的 `effective_from` 在已有起点之间插入新版本。不同用例可复用版本 ID。`layout` 是旧 `sheets, folds` 格式，`probes` 是旧 `queries` 格式（`{id, point}`）的探针列表，可为空。
+- 参考命中在录入时调用现有 `process` 一次预先物化，保留其**全部命中及顺序**（含折痕上的多重命中），每条只取 `layer, sheet, face, source_point`；不比较步骤路径、不替换纸号、不使用浮点容差。因此读包不会重新执行任何历史版面，也不需要原始输入文件。
+- 观测恰含 `id, case, observed_at, probe, hits`，观测 ID 在整个数据集中唯一。每个命中恰有上述四字段：层号为非负整数、列表按层号严格升序、面为 `front`/`back`、来源点是两个输出口径的约分整数或分数字符串（`"2"`、`"-1/2"`，不接受 `"2/4"` 或十进制小数）。空命中列表合法。命中与参考不符、纸号不在参考版面中都是业务证据而非坏批次。
+- 归属只看截至某提交号已录入的参考与观测：先在同用例内取 `effective_from <= observed_at` 的最大起点，再只在该版本寻找观测指定探针。找不到版本或探针时保留观测但不产生证据行，**绝不退回旧版本找探针**。物化行以观测 ID 为键，恰含观测全部字段加 `revision, expected_hits, matches`；`matches` 是逐项精确比较的布尔值。行中的版本本身即追溯依据，即使两版参考命中完全相同，换版也是一次变化。迟到参考只改变受影响时间段内的归属，不改变更早提交号可见的历史。
+- 整批原子生效：结构、版面、身份冲突或内容不合法时整批失败，不留参考、观测，也不占提交号。相同批次 ID 以同一内容重试（对象字段排列不影响身份，数组次序属于内容）返回原提交号；同 ID 改内容抛 `BatchConflictError`。不同批次即使行内容重复也不得复用已有唯一身份（用例内版本、用例内生效起点、全局观测 ID）。
+
+### 增量包
+
+`repo.package(after, through)` 返回普通 dict（`0 <= after < through <= repo.head()`，0 表示空仓），结构固定为：
+
+```json
+{"format": "paper-evidence-package", "version": 1, "dataset": "dataset-c",
+ "after": 1, "through": 2,
+ "changes": [{"id": "o25", "before": {完整行或 null}, "after": {完整行或 null}}]}
+```
+
+- 包标明数据集与两个提交号；每个改变的 ID 升序出现一次，附两端完整 `before`/`after` 行，无行的一端为 `null`。两端一致（含区间内变化后又恢复）的 ID 不输出；空区间也返回带空 `changes` 的完整包。同一区间在再次录入、源仓重开后返回相同内容。
+- 区间非法抛 `RepositoryRangeError`；录入侧身份冲突抛 `BatchConflictError`，两者都是 `RepositoryError`（也是 `ValueError`），结构/内容不合法抛普通 `ValueError`。
+- `paper_layers.evidence.package_dumps/package_loads` 提供紧凑 UTF-8 普通 JSON 往返；`loads` 拒绝重复 JSON 键、`NaN/Infinity` 与非对象根节点。
+
+### 接收端
+
+接收端从指定数据集的第 0 号空副本开始，只持有证据行副本（无原始参考、布局、独立观测存储或联网）：
+
+```python
+from paper_layers.receiver import (Receiver, ReceiverInputError,
+    ReceiverPositionError, ReceiverConflictError)
+from paper_layers.evidence import package_dumps, package_loads
+
+receiver = Receiver.create('run/receiver', 'dataset-c')
+result = receiver.apply(package_loads(package_dumps(repo.package(0, 1))))
+receiver.position()          # 当前提交位置
+receiver.rows()              # 全部完整行，按 ID 升序
+receiver.row('o25')          # 单行或 None；'o25' in receiver 判存在
+receiver.close()
+receiver = Receiver.open('run/receiver')   # 重启后位置与行原样保留
+```
+
+- 只接收同数据集且 `after == receiver.position()` 的下一段；应用前逐个核对 `before` 与本地完整行相同（`null` 表示本地无此 ID）。整包在一个事务内按 `after` 行插入、替换或删除，并把位置改为 `through`；空变化列表同样推进位置。
+- 重复收到与上次成功应用内容完全相同的整包，返回原成功结果（含原位置），不重做、不推进；其余旧包、跳段、交叠包按区间/位置错误拒绝。包结构、键与行身份、单条变更形状或前置行不合法时拒绝整包，所有行与位置不变。
+- 三类可区分错误（均为 `ReceiverError`，也都是 `ValueError`）：`ReceiverInputError`（坏输入/身份/行形状）、`ReceiverPositionError`（数据集不符、区间或位置错误）、`ReceiverConflictError`（形状合法的 `before` 行与本地完整行不符）。
+- 成功结果恰含 `dataset, after, through, changes, position`，其中 `changes` 是本包变更条数、`position == through`。
+
+### 重启与普通 JSON 往返方法
+
+两个存储都只依赖各自目录里的 sqlite 文件：先 `close()`（或用 `with`）正常关闭，新进程里对同目录调用 `SourceRepository.open` / `Receiver.open` 即可继续；重开后重取历史区间得到内容相同的包，接收端重发上次成功的包只得到同一次成功结果。跨设备交接不复制存储目录，而是用 `package_dumps` 把包写成紧凑 JSON 文本、在对端用 `package_loads` 读回（可用任意普通 JSON 通道，如文件或消息体），接收端仅凭包即可更新行与位置。
+

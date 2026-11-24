@@ -18,12 +18,33 @@ The offline entry point for the train/evaluation release manifests:
 Its business failures raise ``ManifestError`` subclasses
 (``PreviousAssignmentConflictError``, ``QuotaUnsatisfiableError``); invalid
 input raises plain ``ValueError``.
+
+The offline layout-regression evidence store:
+
+``SourceRepository.create/open``  persistent single-writer source repository
+``Receiver.create/open``          evidence-only receiver for increment packages
+``package_dumps/package_loads``   plain-JSON package round trip
+
+Receiver failures split into ``ReceiverInputError`` (bad input/identity),
+``ReceiverPositionError`` (dataset/interval/position) and
+``ReceiverConflictError`` (before-row mismatch); source-repository failures
+split into ``BatchConflictError`` and ``RepositoryRangeError``.
 """
 
 from .archive import build_archive, dumps, loads, rebuild_window, serialize_window
 from .manifest import (ManifestError, PreviousAssignmentConflictError,
                        QuotaUnsatisfiableError, build_manifest)
+from .receiver import (Receiver, ReceiverConflictError, ReceiverError,
+                       ReceiverInputError, ReceiverPositionError)
+from .repository import (BatchConflictError, RepositoryError,
+                         RepositoryRangeError, SourceRepository)
+from .evidence import package_dumps, package_loads
 
 __all__ = ['build_archive', 'dumps', 'loads', 'rebuild_window', 'serialize_window',
            'build_manifest', 'ManifestError', 'PreviousAssignmentConflictError',
-           'QuotaUnsatisfiableError']
+           'QuotaUnsatisfiableError',
+           'SourceRepository', 'BatchConflictError', 'RepositoryError',
+           'RepositoryRangeError',
+           'Receiver', 'ReceiverError', 'ReceiverInputError',
+           'ReceiverPositionError', 'ReceiverConflictError',
+           'package_dumps', 'package_loads']
