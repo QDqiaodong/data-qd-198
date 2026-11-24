@@ -166,11 +166,36 @@ result = build_bonds({
 
 界面构造、输出字段与错误的完整约定见 [数据契约](docs/contract.md)。
 
+## 折叠工艺修订的精确影响区
+
+`paper_layers.revision.compare_revisions(data)` 比较同一投影平面中的 `reference` 与 `candidate` 两版版面，用精确多边形 overlay 对每个正面积位置构造底到顶材料栈；即使外轮廓和可见顶层相同，隐藏层顺序、朝上面或投影到原纸的仿射映射变化也会归为 `changed`。入口也以 `build_revision` / `build_revision_report` 名称从 `paper_layers` 导出。
+
+```python
+from paper_layers.revision import compare_revisions, RevisionComplexityError
+
+report = compare_revisions({
+    'reference': {'sheets': [{'id': 'A', 'width': '4', 'height': '2'},
+                             {'id': 'B', 'width': '4', 'height': '2'}],
+                  'folds': []},
+    'candidate': {'sheets': [{'id': 'B', 'width': '4', 'height': '2'},
+                             {'id': 'A', 'width': '4', 'height': '2'}],
+                  'folds': []},
+})
+report['changed_area']   # 8；整片 [0,0,4,2] 是一个 changed 凸多边形
+```
+
+- 每个影响区给出 `category`（`added` / `removed` / `changed`）、凸简单 `polygon`、投影面积，以及 `reference_stack` / `candidate_stack` 完整底到顶层栈；每层含原纸 `sheet`、当前朝上 `face` 和六个精确仿射系数 `affine=[m00,m01,m10,m11,tx,ty]`。
+- 材料身份不含折叠步骤 ID、路径文字或全局层号；步骤改名结果不变。所有坐标、系数、面积均为约分整数或 `n/d` 字符串。
+- 返回多边形内部互不重叠，恰好覆盖全部影响区；四类面积之和等于两版材料投影并集面积，而不是带层重数的 `material_area`。
+- 坏输入整体抛普通 `ValueError`；精确分区超过 32,768 个凸多边形时抛可区分的 `RevisionComplexityError`，不返回局部或近似报告。
+
+可直接运行 `python examples/revision_example.py`（源码树未安装时用 `PYTHONPATH=src python examples/revision_example.py`）。完整 JSON 字段、仿射口径、稳定性和复核用法见 [数据契约](docs/contract.md)。
+
 ## 已执行验证
 
-依赖一致性检查、115 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景、192 MiB 资源验收、证据源仓/接收端的迟到版本归属、删除与插回、空包推进、前置行不符整包回滚、批次重试身份、真实 JSON 往返与重开场景、复验清单的抗缺站选测、站点重指派、不可区分版本无解、1024 层交接件大小限制内往返、缺站判读，以及粘接界面的双纸折叠三界面/跨层位面组合/三纸窄中间层透见/零面积折痕/分离纸件/空规范/改序稳定与坏输入整拒场景）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
+依赖一致性检查、134 项业务测试（含上述归档/重建验收样本、清单发布的正常/冲突/无解/稳定排序场景、192 MiB 资源验收、证据源仓/接收端的迟到版本归属、删除与插回、空包推进、前置行不符整包回滚、批次重试身份、真实 JSON 往返与重开场景、复验清单的抗缺站选测、站点重指派、不可区分版本无解、1024 层交接件大小限制内往返、缺站判读，粘接界面的双纸折叠三界面/跨层位面组合/三纸窄中间层透见/零面积折痕/分离纸件/空规范/改序稳定与坏输入整拒场景，以及修订影响区的换序隐藏栈/对折反射与移除区/非对称折叠增改删/空步骤改名/凸多边形互不重叠与面积恒等/稳定性/复杂度错误区分场景）及命令行端到端演示通过（本地 CPython 3.11.2 直接运行 `PYTHONPATH=src python -m unittest discover -s tests`）。另核重复目标、符号链接目标和重复JSON键都返回2，既有输出字节不变，非法输入不发布报告。输出路径必须未存在，重新演示请选新文件名。
 
-源码入口为 `src/paper_layers/service.py`、`src/paper_layers/archive.py`、`src/paper_layers/bonds.py`、`src/paper_layers/manifest.py` 与 `src/paper_layers/recheck.py`，测试在 `tests/`。业务字段、身份、单位、界限和失败约定见 [数据契约](docs/contract.md)。样例全部为原创合成数据，见 [样例来源](fixtures/SOURCES.md)，源码和样例采用MIT许可。
+源码入口为 `src/paper_layers/service.py`、`src/paper_layers/archive.py`、`src/paper_layers/bonds.py`、`src/paper_layers/revision.py`、`src/paper_layers/manifest.py` 与 `src/paper_layers/recheck.py`，测试在 `tests/`。业务字段、身份、单位、界限和失败约定见 [数据契约](docs/contract.md)。样例全部为原创合成数据，见 [样例来源](fixtures/SOURCES.md)，源码和样例采用MIT许可。
 
 
 ## 当前边界

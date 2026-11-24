@@ -48,6 +48,15 @@ The offline adhesive-interface entry point for the folded stack:
                              polygons and one judgement per bond specification
 
 Invalid input raises plain ``ValueError`` and never yields a partial result.
+
+The offline revision-impact entry point:
+
+``compare_revisions(data)``  exact added/removed/changed projection zones
+                             with complete bottom-to-top material stacks
+
+If exact partitioning exceeds the fixed convex-polygon budget it raises
+``RevisionComplexityError`` (also a ``RevisionError`` and ``ValueError``);
+bad input remains a distinguishable plain ``ValueError``.
 """
 
 from .archive import build_archive, dumps, loads, rebuild_window, serialize_window
@@ -62,6 +71,10 @@ from .recheck import (HandoffInputError, HandoffSizeError,
 from .repository import (BatchConflictError, RepositoryError,
                          RepositoryRangeError, SourceRepository)
 from .evidence import package_dumps, package_loads
+from .revision import (RevisionComplexityError, RevisionError,
+                       build_impact_zones, build_revision,
+                       build_revision_impact_zones, build_revision_report,
+                       compare_revisions, generate_impact_zones)
 
 __all__ = ['build_archive', 'dumps', 'loads', 'rebuild_window', 'serialize_window',
            'build_manifest', 'ManifestError', 'PreviousAssignmentConflictError',
@@ -74,4 +87,8 @@ __all__ = ['build_archive', 'dumps', 'loads', 'rebuild_window', 'serialize_windo
            'build_handoff', 'interpret_handoff', 'handoff_dumps',
            'handoff_loads', 'RecheckError', 'InfeasibleManifestError',
            'HandoffSizeError', 'HandoffInputError',
-           'build_bonds']
+           'build_bonds',
+           'compare_revisions', 'build_revision', 'build_revision_report',
+           'build_revision_impact_zones', 'build_impact_zones',
+           'generate_impact_zones',
+           'RevisionError', 'RevisionComplexityError']

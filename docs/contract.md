@@ -360,3 +360,98 @@ result = build_bonds({
 - 空规范仍返回真实界面清单与空判定数组。
 - 未满足规范是正常业务结果，照常返回；不会省略已计算的界面，也不会因坏输入留下部分界面或部分判定。
 - 本入口只做理想全叠平折的精确几何核算，不判断现实厚度、弹性、可折性或机械碰撞。
+
+## 折叠工艺修订的精确影响区
+
+`paper_layers.revision.compare_revisions(data)`（根包同样导出，并提供 `build_revision` / `build_revision_report` 别名）比较同一投影坐标平面中的参考版与候选版，返回正面积影响区及每区从底到顶的完整材料栈。它复用既有 `layout_parts`、`fold_stack`、精确半平面裁剪和反射链，不新增 CLI、交互界面、物理折纸模拟或第三方依赖；既有 `process`、点查询、归档、清单、证据、复验和 `build_bonds` 行为不变。
+
+可直接运行的例子在 `examples/revision_example.py`：
+
+```sh
+python examples/revision_example.py
+# 未安装包时：PYTHONPATH=src python examples/revision_example.py
+```
+
+```python
+from paper_layers.revision import compare_revisions, RevisionComplexityError
+
+report = compare_revisions({
+    'reference': {'sheets': [{'id': 'A', 'width': '4', 'height': '2'},
+                             {'id': 'B', 'width': '4', 'height': '2'}],
+                  'folds': []},
+    'candidate': {'sheets': [{'id': 'B', 'width': '4', 'height': '2'},
+                             {'id': 'A', 'width': '4', 'height': '2'}],
+                  'folds': []},
+})
+report['changed_area']                 # 8
+[z['polygon'] for z in report['regions']]
+# [[[0, 0], [4, 0], [4, 2], [0, 2]]]
+```
+
+### 输入与材料身份
+
+入参对象必须恰含 `reference`、`candidate` 两个字段；每个版本都是恰含 `sheets`、`folds` 的既有版面对象，字段、ID 语法 `[A-Za-z0-9_:-]{1,64}`、精确十进制坐标、1..10 张纸、0..10 道折及碎片上限全部沿用基线契约。两版分别完整解析和折叠；任一侧缺/多字段、ID 重复、零法向折线、非法坐标或非法版面都抛普通 `ValueError`，比较函数不修改输入，也不产生可消费的部分报告。
+
+在两版共享的投影平面上，对每个正面积分区收集覆盖该处的全部碎片，并按最终底到顶顺序形成局部层栈。每层材料身份恰为：
+
+```text
+(sheet_id, face, affine)
+affine = (m00, m01, m10, m11, tx, ty)
+source_x = m00*x + m01*y + tx
+source_y = m10*x + m11*y + ty
+```
+
+`face` 是该碎片当前朝上面（`front` / `back`），`affine` 是投影坐标回到该层原纸坐标的精确仿射变换。输出层至少含 `sheet`、`face`、`affine`；同时给出同值的 `transform` 别名。折叠步骤 ID、步骤路径文字和全局层号不是材料身份：仅给折叠步骤改名不会产生影响；反之，即使外轮廓和可见顶层相同，隐藏层顺序、朝上面或来源仿射映射不同也必须报告。`sheets` 与 `folds` 的输入顺序有业务含义，比较器不会排序或规范化这些数组。
+
+### 分区与输出
+
+返回普通 JSON 可序列化字典。规范列表键为 `regions`，并提供同对象的 `impact_zones`、`zones`、`changes` 别名；面积同时放在 `areas` 与顶层 `unchanged_area`、`added_area`、`removed_area`、`changed_area`：
+
+```json
+{
+  "regions": [{
+    "category": "changed",
+    "polygon": [[0, 0], [4, 0], [4, 2], [0, 2]],
+    "reference_stack": [
+      {"sheet": "A", "face": "front", "affine": [1, 0, 0, 1, 0, 0]},
+      {"sheet": "B", "face": "front", "affine": [1, 0, 0, 1, 0, 0]}
+    ],
+    "candidate_stack": [
+      {"sheet": "B", "face": "front", "affine": [1, 0, 0, 1, 0, 0]},
+      {"sheet": "A", "face": "front", "affine": [1, 0, 0, 1, 0, 0]}
+    ],
+    "area": 8
+  }],
+  "areas": {"unchanged": 0, "added": 0, "removed": 0, "changed": 8},
+  "unchanged_area": 0,
+  "added_area": 0,
+  "removed_area": 0,
+  "changed_area": 8
+}
+```
+
+每个影响区含：
+
+- `category`：`added`（参考版空栈、候选版有材料）、`removed`（参考版有材料、候选版空栈）或 `changed`（两版均有材料但完整有序签名不同）；另给同值 `kind`、`type` 别名。
+- `polygon`：一个逆时针、无重复/共线顶点的凸简单多边形，顶点循环旋转到字典序最小起点。
+- `reference_stack` / `candidate_stack`：该区两版完整的底到顶局部层栈；`[]` 表示该版在 polygon 内部没有材料。`reference`、`candidate`、`ref_stack`、`cand_stack` 是同值别名。
+- `area`：该 polygon 在投影平面上的精确面积。
+
+`unchanged` 区域不进入 `regions`，但其面积计入 `areas.unchanged` 与 `unchanged_area`。所有坐标、仿射系数和面积都用约分后的整数或 `n/d` 字符串，绝不使用浮点。结果稳定：相同输入的类别、polygon 绕行方向、起点、系数写法和数组顺序相同；只改折叠步骤 ID 或输入字典键顺序不改变结果。
+
+返回的影响区 polygon 内部两两不重叠，合起来恰好覆盖全部 `added`、`removed`、`changed` 正面积位置；边界可以共享。闭折痕或多边形边界上的零面积差异不单独报告。允许把同类区域拆成多个凸多边形，不要求合并相邻区域。
+
+### 面积口径与复杂度
+
+面积是共享投影平面上的**投影覆盖面积**，同一位置的多个材料层不按重数重复计算。因此恒有：
+
+```text
+unchanged_area + added_area + removed_area + changed_area
+  = area(reference_material_projection ∪ candidate_material_projection)
+```
+
+这与基线 `material_area`（所有碎片面积带重数之和，恒等于原纸总面积）不同。
+
+精确 overlay 所需凸多边形超过 `paper_layers.revision.MAX_REVISION_POLYGONS = 32768` 时，抛 `RevisionComplexityError`。它继承 `RevisionError` 与 `ValueError`，但与坏输入的普通 `ValueError` 可区分；不会截断、近似、只返回前几区或给出伪成功汇总。
+
+复核时可按 `category` 先定位新增/消失的投影区域，再在 `changed` 区内把两份完整栈逐层交给制样组：`sheet` 找原纸，`face` 判断当前朝上/接触面，`affine` 把问题点或 polygon 精确映回原纸坐标。隐藏层和来源映射变化不需要靠外轮廓、总层数、总面积或可见顶层抽查发现。
